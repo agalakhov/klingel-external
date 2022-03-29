@@ -16,7 +16,7 @@ use crate::hal::{
 };
 
 use smart_leds::{SmartLedsWrite, White, RGBW};
-use ws2812_spi as led;
+use ws2812_uart as led;
 
 use core::fmt::Write;
 
@@ -30,7 +30,7 @@ fn main() -> ! {
     let core = cortex_m::Peripherals::take().unwrap();
     let dev = stm32::Peripherals::take().unwrap();
 
-    let pll_cfg = PllConfig::with_hsi(4, 24, 2);
+    let pll_cfg = PllConfig::with_hsi(2, 16, 2);
     let rcc_cfg = rcc::Config::pll().pll_cfg(pll_cfg);
     let mut rcc = dev.RCC.freeze(rcc_cfg);
 
@@ -69,36 +69,38 @@ fn main() -> ! {
     // Sleep 3 seconds before initializing SWD port as GPIO
     delay.delay(3.seconds());
 
-    //    let led = spi::NoMosi;
-    //    let led = gpiob.pb5; // SPI1
     let led = gpioa.pa14; // USART2
-                          //    let mut spi = Spi::spi1(dev.SPI1, (spi::NoSck, spi::NoMiso, led), led::MODE, 3.mhz(), &mut rcc);
-                          //    let mut led = led::Ws2812::new_sk6812w(spi);
-                          //
-    let mut led = dev
+    let led = dev
         .USART2
         .usart(
             led,
             NoRx,
             serial::BasicConfig::default()
-                .baudrate(3_000_000.bps())
-                .wordlength_7()
+                .baudrate(3_750_000.bps())
                 .invert_tx(),
             &mut rcc,
         )
         .expect("Can't initialize LED UART");
+    let mut led = led::Ws2812::<_, led::device::Sk6812w>::new(led);
 
     writeln!(rs485, "# LED work started").ok();
 
     let _buttons = gpioa.pa13; // ADC1_IN17
 
+    let mut i = 0;
     loop {
-        block!(led.write(0b100_100));
-        for i in 0..24 {
-            if let Err(e) = block!(led.write(0b11001000)) {
-                writeln!(rs485, "W err @{}: {:?}", i, e).ok();
-            }
-        }
-        delay.delay(80.us());
+        let color = RGBW {
+            r: if i & 1 != 0 { 255 } else { 0 },
+            g: if i & 2 != 0 { 255 } else { 0 },
+            b: if i & 4 != 0 { 255 } else { 0 },
+            a: White(if i & 8 != 0 { 255 } else { 0 }),
+        };
+        i = (i + 1) % 16;
+
+        writeln!(rs485, "Setting color {:?}", color);
+        led.write([color; 8].into_iter())
+            .expect("Error sending LED color");
+
+        delay.delay(250.ms());
     }
 }
