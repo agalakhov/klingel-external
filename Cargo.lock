@@ -87,6 +87,7 @@ version = "0.1.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
+ "embedded-hal",
  "panic-semihosting",
  "smart-leds",
  "stm32g0xx-hal",
