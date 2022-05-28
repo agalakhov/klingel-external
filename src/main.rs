@@ -2,20 +2,18 @@
 #![no_main]
 
 mod adc;
+mod app;
 mod led;
-mod platform;
 mod rs485;
 
-use cortex_m_rt::entry;
 use hal::prelude::*;
 use stm32g0xx_hal as hal;
 
 use core::fmt::Write;
 
 use led::Color;
-use platform::Platform;
 
-#[entry]
+/*
 fn main() -> ! {
     let Platform {
         mut rs485,
@@ -66,3 +64,4 @@ fn main() -> ! {
         }
     }
 }
+*/

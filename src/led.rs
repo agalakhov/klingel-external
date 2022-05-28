@@ -3,7 +3,7 @@ use ws2812_uart;
 
 use crate::hal::{self, serial, stm32};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Color {
     Off,
     Red,
@@ -50,14 +50,14 @@ impl From<Color> for RGBW<u8> {
                 a: W(0),
             },
             Magenta => RGBW {
-                r: 128,
+                r: 138,
                 g: 0,
-                b: 128,
+                b: 90,
                 a: W(0),
             },
             Yellow => RGBW {
-                r: 128,
-                g: 128,
+                r: 150,
+                g: 90,
                 b: 0,
                 a: W(0),
             },
@@ -71,11 +71,44 @@ impl From<Color> for RGBW<u8> {
     }
 }
 
+#[derive(Debug)]
+pub enum Mode {
+    Constant(Color),
+    Blink(Color, u32),
+}
+
+impl Mode {
+    const fn max_ticks(&self) -> u32 {
+        use Mode::*;
+        match self {
+            Constant(_) => 1000,
+            Blink(_, period) => *period,
+        }
+    }
+
+    fn color_for_tick(&self, tick: u32, on_reset: bool) -> Option<Color> {
+        use Mode::*;
+        match self {
+            Constant(color) => if tick == 0 || on_reset { Some(*color) } else { None },
+            Blink(color, period) => {
+                let c = if tick >= period/2 { Color::Off } else { *color };
+                if tick == 0 || tick == period/2 || on_reset {
+                    Some(c)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
 pub struct Leds {
     led: ws2812_uart::Ws2812<
         hal::serial::Serial<stm32::USART2, serial::BasicConfig>,
         ws2812_uart::device::Sk6812w,
     >,
+    mode: Mode,
+    tick: u32,
 }
 
 impl Leds {
@@ -84,13 +117,19 @@ impl Leds {
     ) -> Self {
         let led = ws2812_uart::Ws2812::<_, ws2812_uart::device::Sk6812w>::new(uart);
 
-        Self { led }
+        let mode = Mode::Constant(Color::Magenta);
+        Self { led, mode, tick: 0 }
     }
 
     pub fn tick(&mut self) {
-
+        if let Some(color) = self.mode.color_for_tick(self.tick, false) {
+            self.set_board_color_raw(color.into());
+        }
+        self.tick += 1;
+        if self.tick >= self.mode.max_ticks() {
+            self.tick = 0;
+        };
     }
-
 
     fn set_board_color_raw(&mut self, color: RGBW<u8>) {
         self.led
@@ -101,6 +140,14 @@ impl Leds {
     pub fn set_board_color(&mut self, color: Color) {
         self.set_board_color_raw(color.into())
     }
+
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        if self.tick >= self.mode.max_ticks() {
+            self.tick = 0;
+        }
+        if let Some(color) = self.mode.color_for_tick(self.tick, true) {
+            self.set_board_color_raw(color.into());
+        }
+    }
 }
-
-

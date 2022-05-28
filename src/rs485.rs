@@ -19,7 +19,7 @@ where
         for byte in data {
             block!(self.uart.write(*byte))?;
             let feedback = block!(self.uart.read())?;
-            if (feedback != *byte) {
+            if feedback != *byte {
                 return Err(SendError);
             }
         }
