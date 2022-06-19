@@ -170,7 +170,8 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "cortex-m-rtic",
- "embedded-hal",
+ "fugit",
+ "heapless",
  "panic-semihosting",
  "smart-leds",
  "stm32g0xx-hal",
@@ -482,11 +483,12 @@ dependencies = [
 
 [[package]]
 name = "stm32g0xx-hal"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "bare-metal 1.0.0",
  "cortex-m",
  "embedded-hal",
+ "fugit",
  "nb 1.0.0",
  "stm32g0",
  "void",

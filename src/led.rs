@@ -3,6 +3,8 @@ use ws2812_uart;
 
 use crate::hal::{self, serial, stm32};
 
+use fugit::{Rate, Duration};
+
 #[derive(Debug, Clone, Copy)]
 pub enum Color {
     Off,
@@ -74,7 +76,7 @@ impl From<Color> for RGBW<u8> {
 #[derive(Debug)]
 pub enum Mode {
     Constant(Color),
-    Blink(Color, u32),
+    Blink(Color, Rate<u32, 1, 100>),
 }
 
 impl Mode {
@@ -82,17 +84,27 @@ impl Mode {
         use Mode::*;
         match self {
             Constant(_) => 1000,
-            Blink(_, period) => *period,
+            Blink(_, period) => period.raw(),
         }
     }
 
     fn color_for_tick(&self, tick: u32, on_reset: bool) -> Option<Color> {
         use Mode::*;
         match self {
-            Constant(color) => if tick == 0 || on_reset { Some(*color) } else { None },
+            Constant(color) => {
+                if tick == 0 || on_reset {
+                    Some(*color)
+                } else {
+                    None
+                }
+            }
             Blink(color, period) => {
-                let c = if tick >= period/2 { Color::Off } else { *color };
-                if tick == 0 || tick == period/2 || on_reset {
+                let c = if tick >= period.raw() / 2 {
+                    Color::Off
+                } else {
+                    *color
+                };
+                if tick == 0 || tick == period.raw() / 2 || on_reset {
                     Some(c)
                 } else {
                     None
@@ -121,6 +133,10 @@ impl Leds {
         Self { led, mode, tick: 0 }
     }
 
+    pub const fn period(&self) -> Duration<u64, 1, 1000> {
+        Duration::<u64, 1, 1000>::from_ticks(10)
+    }
+
     pub fn tick(&mut self) {
         if let Some(color) = self.mode.color_for_tick(self.tick, false) {
             self.set_board_color_raw(color.into());
@@ -135,10 +151,6 @@ impl Leds {
         self.led
             .write([color; 8].into_iter())
             .expect("Error sending LED color");
-    }
-
-    pub fn set_board_color(&mut self, color: Color) {
-        self.set_board_color_raw(color.into())
     }
 
     pub fn set_mode(&mut self, mode: Mode) {

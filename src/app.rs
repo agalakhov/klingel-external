@@ -2,34 +2,43 @@ use rtic::app;
 
 use panic_semihosting as _;
 
-#[app(device = crate::hal::stm32, peripherals = true, dispatchers = [EXTI0_1, EXTI2_3, EXTI4_15])]
+#[app(device = crate::hal::stm32, peripherals = true, dispatchers = [EXTI0_1, EXTI2_3, EXTI4_15, I2C1, I2C2, SPI1, SPI2])]
 mod app {
     use crate::adc::{AdcReader, Button};
     use crate::hal::{
-        self,
-        prelude::*,
         gpio::{gpioa::PA13, Analog},
+        prelude::*,
         rcc::{self, Enable, PllConfig},
-        serial, stm32,
+        serial,
+        stm32,
     };
     use crate::led::{Color, Leds, Mode};
-    use systick_monotonic::{fugit::ExtU64, Systick};
+    use crate::rs485::{DataPacket, Rs485Rx, Rs485Tx};
+    use core::mem::replace;
+    use rtic::pend;
+    use systick_monotonic::{fugit::ExtU64, fugit::RateExtU32, Systick};
+    use core::fmt::Write;
 
     #[shared]
     struct Shared {
         voltage: u16,
         temperature: i16,
         button: Option<Button>,
+        command: Option<u8>,
+        timer_flag: bool,
+        ping_flag: bool,
     }
 
     #[local]
     struct Local {
         led: Leds,
         adc: AdcReader<PA13<Analog>>,
+        rs485rx: Rs485Rx,
+        rs485tx: Rs485Tx,
     }
 
     #[monotonic(binds = SysTick, default = true)]
-    type MyMono = Systick<100>; // 100 Hz / 10 ms granularity
+    type MyMono = Systick<1000>; // 1000 Hz / 1 ms granularity
 
     #[init]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
@@ -56,24 +65,30 @@ mod app {
 
         // Configure RS485
         let (rxd, txd, de) = (gpiob.pb7, gpioa.pa9, gpioa.pa12); // USART1
-        let rs485 = dev
+        let (tx, rx) = dev
             .USART1
             .usart_hwflow(
                 txd,
                 rxd,
                 serial::Rs485FlowControl { de },
                 serial::FullConfig::default()
-                    .baudrate(115200.bps())
+                    .baudrate(crate::RS485_BAUD.bps())
                     .invert_tx()
                     .invert_rx()
                     .swap_pins(),
                 &mut rcc,
             )
-            .expect("Can't initialize RS485");
+            .expect("Can't initialize RS485")
+            .split();
+        let rs485timer = dev.TIM17.timer(&mut rcc);
+        let dma = dev.DMA.split(&mut rcc, dev.DMAMUX);
+        let rs485rx = Rs485Rx::new(rx, rs485timer);
+        let rs485tx = Rs485Tx::new(tx, dma.ch1);
+
 
         // Sleep 50 milliseconds before disabling SWD which is used as UART TX and ADC input.
         // This helps doing SWD debugging.
-        delay.delay(50.ms());
+        delay.delay(50_u32.millis());
 
         // Configure Smart LED using UART
         let led = gpioa.pa14; // USART2
@@ -89,8 +104,8 @@ mod app {
             )
             .expect("Can't initialize LED UART");
         let mut led = Leds::new(led);
-        delay.delay(1.ms());
-        led.set_mode(Mode::Blink(Color::Yellow, 500));
+        delay.delay(1_u32.millis());
+        led.set_mode(Mode::Blink(Color::Yellow, 1.Hz()));
 
         // Configure buttons via ADC
         let buttons = gpioa.pa13; // ADC1_IN17
@@ -101,56 +116,93 @@ mod app {
             voltage: 0,
             temperature: -273,
             button: None,
+            command: None,
+            ping_flag: false,
+            timer_flag: false,
         };
 
-        let local = Local { led, adc };
-        let mono = Systick::new(delay.release(), rcc.clocks.core_clk.0);
+        let local = Local { led, adc, rs485rx, rs485tx };
+        let mono = Systick::new(delay.release(), rcc.clocks.ahb_clk.raw());
 
         led_work::spawn().expect("Can't spawn led_work");
         adc_work::spawn().expect("Can't spawn adc_work");
+        ping::spawn_after(1000_u64.millis()).expect("Can't spawn ping");
 
         (shared, local, init::Monotonics(mono))
     }
 
-    #[task(priority = 1, local = [led], shared = [button])]
+    #[task(priority = 2, local = [led], shared = [command])]
     fn led_work(mut cx: led_work::Context) {
-        let button = cx.shared.button.lock(|mut b| {
-            b.take()
-        });
-
-        if let Some(button) = button {
-            use Button::*;
-            let color = match button {
-                Button0 => Color::White,
-                Button1 => Color::Red,
-                Button2 => Color::Green,
-                Button3 => Color::Blue,
-                Button4 => Color::Yellow,
-                Button5 => Color::Magenta,
+        let cmd = cx.shared.command.lock(|cmd| cmd.take());
+        if let Some(cmd) = cmd {
+            let mode = match cmd {
+                b'R' => Mode::Constant(Color::Red),
+                b'G' => Mode::Constant(Color::Green),
+                b'Y' => Mode::Constant(Color::Yellow),
+                b'W' => Mode::Constant(Color::White),
+                _ => Mode::Constant(Color::Magenta),
             };
-            cx.local.led.set_mode(Mode::Constant(color));
+            cx.local.led.set_mode(mode);
         }
 
         cx.local.led.tick();
-        led_work::spawn_after(10.millis()).expect("Can't respawn led_work");
+        led_work::spawn_after(cx.local.led.period()).expect("Can't respawn led_work");
     }
 
     #[task(priority = 1, local = [adc], shared = [voltage, temperature, button])]
     fn adc_work(mut cx: adc_work::Context) {
         let adc = cx.local.adc;
         let (voltage, temperature) = adc.read_voltage_temperature();
-        cx.shared.voltage.lock(|mut v| {
+        cx.shared.voltage.lock(|v| {
             *v = voltage;
         });
-        cx.shared.temperature.lock(|mut t| {
+        cx.shared.temperature.lock(|t| {
             *t = temperature;
         });
         if let Ok(Some(button)) = adc.read_button() {
-            cx.shared.button.lock(|mut b| {
+            cx.shared.button.lock(|b| {
                 *b = Some(button);
             });
         }
-        adc_work::spawn_after(1.millis()).expect("Can't respawn adc_work");
+        adc_work::spawn_after(1_u64.millis()).expect("Can't respawn adc_work");
+    }
+
+    #[task(priority = 1, shared = [ping_flag])]
+    fn ping(mut cx: ping::Context) {
+        cx.shared.ping_flag.lock(|f| *f = true);
+        pend(stm32::Interrupt::USART1);
+        ping::spawn_after(1000_u64.millis()).expect("Can't respawn ping");
+    }
+
+    #[task(priority = 2, binds = TIM17, shared = [timer_flag])]
+    fn timer_interrupt(mut cx: timer_interrupt::Context) {
+        cx.shared.timer_flag.lock(|v| *v = true);
+        pend(stm32::Interrupt::USART1);
+    }
+
+    #[task(priority = 3, binds = USART1, local = [rs485rx, rs485tx], shared = [button, voltage, temperature, ping_flag, timer_flag, command])]
+    fn rs485_interrupt(mut cx: rs485_interrupt::Context) {
+        let button = cx.shared.button.lock(|b| b.take());
+        let ping_flag = cx.shared.ping_flag.lock(|f| replace(f, false));
+
+        if button.is_some() || ping_flag {
+            let voltage = cx.shared.voltage.lock(|v| *v);
+            let temperature = cx.shared.temperature.lock(|t| *t);
+            let packet = DataPacket {
+                voltage,
+                temperature,
+                button,
+            };
+
+            cx.local.rs485tx.transmit(|buf| writeln!(buf, "Foo Bar").unwrap() );
+        }
+
+        let data = cx.local.rs485rx.interrupt(cx.shared.timer_flag.lock(|v| *v));
+        if let Some(data) = data {
+            cx.shared.command.lock(|cmd| {
+                *cmd = Some(data);
+            });
+        }
     }
 
     #[idle]
