@@ -1,14 +1,14 @@
 //! RS485 arbiter.
 
 use crate::hal::{
-    block,
     prelude::*,
-    serial::{FullConfig, Serial, Rx, Tx},
+    serial::{FullConfig, Rx, Tx},
     timer::Timer,
     dma::{self, Channel, Target},
     stm32::{USART1, TIM17},
 };
 use heapless::String;
+use protocol::{Address, incoming};
 
 pub struct SendError;
 
@@ -18,7 +18,7 @@ type UARTTX = Tx<UART, FullConfig>;
 type DMA = dma::C1;
 type TIMER = Timer<TIM17>;
 
-const SLOTSIZE: u32 = 10; // bytes
+const SLOTSIZE: u32 = 32; // bytes
 
 impl From<crate::hal::serial::Error> for SendError {
     fn from(_: crate::hal::serial::Error) -> Self {
@@ -26,16 +26,17 @@ impl From<crate::hal::serial::Error> for SendError {
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum Token {
+    Unknown(u32),
+    Addr(Address),
+}
+
 pub struct Rs485Rx {
     uart: UARTRX,
     timer: TIMER, 
-    token: Option<u8>,
-}
-
-pub struct DataPacket {
-    pub voltage: u16,
-    pub temperature: i16,
-    pub button: Option<crate::adc::Button>,
+    parser: incoming::Parser,
+    token: Token,
 }
 
 impl Rs485Rx {
@@ -50,8 +51,13 @@ impl Rs485Rx {
         Self {
             uart,
             timer,
-            token: None,
+            parser: incoming::Parser::new(),
+            token: Token::Unknown(0),
         }
+    }
+
+    pub fn is_my_turn(&self) -> bool {
+        self.token == Token::Addr(crate::DEVICE_ADDRESS)
     }
 
     pub fn interrupt(&mut self, mut timer: bool) -> Option<u8> {
@@ -59,7 +65,12 @@ impl Rs485Rx {
             if let Ok(byte) = self.uart.read() {
                 self.timer.active();
                 timer = false;
-                return Some(byte); // TODO
+                if let Some(msg) = self.parser.feed(byte as char) {
+                    self.token = Token::Addr(msg.sender);
+                    if let Some(cmd) = msg.command {
+                        return Some(cmd)
+                    }
+                }
             }
         }
 
@@ -70,39 +81,27 @@ impl Rs485Rx {
         }
 
         if timer {
-            self.timer.clear_irq();    
+            self.timer.clear_irq();
+            self.token = match self.token {
+                Token::Unknown(n) => {
+                    if n < crate::MAX_DETECT_CYCLES {
+                        Token::Unknown(n + 1)
+                    } else {
+                        Token::Addr(Address::first())
+                    }
+                }
+                Token::Addr(a) => Token::Addr(a.next()),
+            }
         }
 
         None
     }
-/*
-  fn send_packet_raw(&mut self, data: &[u8]) -> Result<(), SendError> {
-        self.timer.active();
-        let ret = unimplementedself.uart.send_bytes(data.into_iter().cloned());
-        self.timer.inactive();
-        ret
-    }
-
-    pub fn send_packet(&mut self, packet: DataPacket) -> Result<(), SendError> {
-        let mut buf = String::<32>::new();
-        write!(
-            buf,
-            "{}:{}:T{temp:+02},V{volt:04}\n",
-            crate::DEVICE_ADDRESS,
-            crate::PURPOSE,
-            temp = packet.temperature,
-            volt = packet.voltage
-        )
-        .expect("Not enough space in string");
-        self.send_packet_raw(buf.as_bytes())
-    }
-    */
 }
 
-pub type BUF = String<64>;
+pub type BUF = String<32>;
 
 pub struct Rs485Tx {
-    tx: UARTTX,
+    _tx: UARTTX,
     dma: DMA,
 }
 
@@ -117,7 +116,7 @@ impl Rs485Tx {
         dma.listen(dma::Event::TransferComplete);
 
         Self {
-            tx,
+            _tx: tx,
             dma,
         }
     }
@@ -126,7 +125,7 @@ impl Rs485Tx {
         static mut BUF: BUF = String::new(); 
         unsafe {
             BUF.clear();
-            let len = datagen(&mut BUF);
+            datagen(&mut BUF);
             self.dma.disable();
             self.dma.set_memory_address(BUF.as_ptr() as u32, true);
             self.dma.set_transfer_length(BUF.len() as u16);
@@ -134,27 +133,11 @@ impl Rs485Tx {
             self.dma.enable();
         }
     }
-}
 
-
-
-/*trait UartWithFeedback {
-    fn send_bytes(&mut self, bytes: impl IntoIterator<Item = u8>) -> Result<(), SendError>;
-}
-
-impl UartWithFeedback for UARTRX {
-    fn send_bytes(&mut self, bytes: impl IntoIterator<Item = u8>) -> Result<(), SendError> {
-        for byte in bytes {
-            block!(self.write(byte))?;
-            let feedback = block!(self.read())?;
-            if feedback != byte {
-                return Err(SendError);
-            }
-        }
-        Ok(())
+    pub fn is_idle(&self) -> bool {
+        ! self.dma.is_enabled() // FIXME this is incorrect
     }
-}*/
-
+}
 
 trait ActivityTimer {
     fn active(&mut self);

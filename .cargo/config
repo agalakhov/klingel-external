@@ -1,5 +1,5 @@
 [target.thumbv6m-none-eabi]
-runner = 'arm-none-eabi-gdb'
+runner = "arm-none-eabi-gdb"
 rustflags = [
   "-C", "link-arg=-Tlink.x",
 ]
@@ -9,5 +9,5 @@ target = "thumbv6m-none-eabi"
 
 [profile.release]
 opt-level = 3
-lto = false
+lto = true
 debug = true

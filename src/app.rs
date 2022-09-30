@@ -11,13 +11,15 @@ mod app {
         rcc::{self, Enable, PllConfig},
         serial,
         stm32,
+        watchdog::IndependedWatchdog,
     };
     use crate::led::{Color, Leds, Mode};
-    use crate::rs485::{DataPacket, Rs485Rx, Rs485Tx};
+    use crate::rs485::{Rs485Rx, Rs485Tx};
     use core::mem::replace;
     use rtic::pend;
     use systick_monotonic::{fugit::ExtU64, fugit::RateExtU32, Systick};
-    use core::fmt::Write;
+    use protocol::outgoing::Message;
+    use cortex_m::asm;
 
     #[shared]
     struct Shared {
@@ -35,6 +37,7 @@ mod app {
         adc: AdcReader<PA13<Analog>>,
         rs485rx: Rs485Rx,
         rs485tx: Rs485Tx,
+        dog: IndependedWatchdog, 
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -67,10 +70,8 @@ mod app {
         let (rxd, txd, de) = (gpiob.pb7, gpioa.pa9, gpioa.pa12); // USART1
         let (tx, rx) = dev
             .USART1
-            .usart_hwflow(
-                txd,
-                rxd,
-                serial::Rs485FlowControl { de },
+            .usart(
+                (txd, rxd, de),
                 serial::FullConfig::default()
                     .baudrate(crate::RS485_BAUD.bps())
                     .invert_tx()
@@ -90,13 +91,16 @@ mod app {
         // This helps doing SWD debugging.
         delay.delay(50_u32.millis());
 
+        // Setup watchdog
+        let mut dog = dev.IWDG.constrain();
+        dog.start(10_u32.secs());
+
         // Configure Smart LED using UART
         let led = gpioa.pa14; // USART2
         let led = dev
             .USART2
             .usart(
-                led,
-                serial::NoRxPin,
+                (led, serial::NoRx),
                 serial::BasicConfig::default()
                     .baudrate(3_750_000.bps())
                     .invert_tx(),
@@ -114,14 +118,14 @@ mod app {
 
         let shared = Shared {
             voltage: 0,
-            temperature: -273,
+            temperature: -2731,
             button: None,
             command: None,
             ping_flag: false,
             timer_flag: false,
         };
 
-        let local = Local { led, adc, rs485rx, rs485tx };
+        let local = Local { led, adc, rs485rx, rs485tx, dog };
         let mono = Systick::new(delay.release(), rcc.clocks.ahb_clk.raw());
 
         led_work::spawn().expect("Can't spawn led_work");
@@ -170,7 +174,6 @@ mod app {
     #[task(priority = 1, shared = [ping_flag])]
     fn ping(mut cx: ping::Context) {
         cx.shared.ping_flag.lock(|f| *f = true);
-        pend(stm32::Interrupt::USART1);
         ping::spawn_after(1000_u64.millis()).expect("Can't respawn ping");
     }
 
@@ -180,33 +183,37 @@ mod app {
         pend(stm32::Interrupt::USART1);
     }
 
-    #[task(priority = 3, binds = USART1, local = [rs485rx, rs485tx], shared = [button, voltage, temperature, ping_flag, timer_flag, command])]
+    #[task(priority = 3, binds = USART1, local = [dog, rs485rx, rs485tx], shared = [button, voltage, temperature, ping_flag, timer_flag, command])]
     fn rs485_interrupt(mut cx: rs485_interrupt::Context) {
-        let button = cx.shared.button.lock(|b| b.take());
-        let ping_flag = cx.shared.ping_flag.lock(|f| replace(f, false));
-
-        if button.is_some() || ping_flag {
-            let voltage = cx.shared.voltage.lock(|v| *v);
-            let temperature = cx.shared.temperature.lock(|t| *t);
-            let packet = DataPacket {
-                voltage,
-                temperature,
-                button,
-            };
-
-            cx.local.rs485tx.transmit(|buf| writeln!(buf, "Foo Bar").unwrap() );
+        cx.local.dog.feed();
+        let cmd = cx.local.rs485rx.interrupt(cx.shared.timer_flag.lock(|f| replace(f, false)));
+        if let Some(c) = cmd {
+            cx.shared.command.lock(|cmd| {
+                *cmd = Some(c);
+            });
         }
 
-        let data = cx.local.rs485rx.interrupt(cx.shared.timer_flag.lock(|v| *v));
-        if let Some(data) = data {
-            cx.shared.command.lock(|cmd| {
-                *cmd = Some(data);
-            });
+        if cx.local.rs485rx.is_my_turn() && cx.local.rs485tx.is_idle() {
+            let button = cx.shared.button.lock(|b| b.take());
+            let ping_flag = cx.shared.ping_flag.lock(|f| replace(f, false));
+            if button.is_some() || ping_flag {
+                let voltage = cx.shared.voltage.lock(|v| *v);
+                let temperature = cx.shared.temperature.lock(|t| *t);
+                let message = Message {
+                    sender: crate::DEVICE_ADDRESS,
+                    button: button.map(|b| b as u8),
+                    temperature,
+                    voltage,
+                };
+                cx.local.rs485tx.transmit(|buf| message.to_bytes(buf));
+            }
         }
     }
 
     #[idle]
     fn idle(_cx: idle::Context) -> ! {
-        loop {}
+        loop {
+            asm::wfi();
+        }
     }
 }
