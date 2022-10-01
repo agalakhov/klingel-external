@@ -36,6 +36,7 @@ pub struct Rs485Rx {
     uart: UARTRX,
     timer: TIMER, 
     parser: incoming::Parser,
+    bus_busy: bool,
     token: Token,
 }
 
@@ -53,11 +54,12 @@ impl Rs485Rx {
             timer,
             parser: incoming::Parser::new(),
             token: Token::Unknown(0),
+            bus_busy: true,
         }
     }
 
     pub fn is_my_turn(&self) -> bool {
-        self.token == Token::Addr(crate::DEVICE_ADDRESS)
+        ! self.bus_busy && self.token == Token::Addr(crate::DEVICE_ADDRESS)
     }
 
     pub fn interrupt(&mut self, mut timer: bool) -> Option<u8> {
@@ -66,6 +68,7 @@ impl Rs485Rx {
         }
 
         while self.uart.is_rxne() {
+            self.bus_busy = true;
             if let Ok(byte) = self.uart.read() {
                 self.timer.active();
                 timer = false;
@@ -79,6 +82,7 @@ impl Rs485Rx {
         }
 
         if self.uart.is_idle() {
+            self.bus_busy = false;
             self.timer.inactive();
             timer = false;
             self.uart.clear_idle();
