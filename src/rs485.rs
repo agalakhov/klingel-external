@@ -41,7 +41,7 @@ pub struct Rs485Rx {
 
 impl Rs485Rx {
     pub fn new(mut uart: UARTRX, mut timer: TIMER) -> Self {
-        timer.start((1_000_000 / SLOTSIZE * (10 + 0) / crate::RS485_BAUD).micros());
+        timer.start((1_000_000_u32 * (10 + 0) * SLOTSIZE / crate::RS485_BAUD).micros());
 
         uart.listen();
         uart.listen_idle();
@@ -61,6 +61,10 @@ impl Rs485Rx {
     }
 
     pub fn interrupt(&mut self, mut timer: bool) -> Option<u8> {
+        if timer {
+            self.timer.clear_irq();
+        }
+
         while self.uart.is_rxne() {
             if let Ok(byte) = self.uart.read() {
                 self.timer.active();
@@ -81,16 +85,19 @@ impl Rs485Rx {
         }
 
         if timer {
-            self.timer.clear_irq();
-            self.token = match self.token {
+            let q = match self.token {
                 Token::Unknown(n) => {
                     if n < crate::MAX_DETECT_CYCLES {
-                        Token::Unknown(n + 1)
+                        (Token::Unknown(n + 1), None)
                     } else {
-                        Token::Addr(Address::first())
+                        (Token::Addr(Address::first()), Some(b'R'))
                     }
                 }
-                Token::Addr(a) => Token::Addr(a.next()),
+                Token::Addr(a) => (Token::Addr(a.next()), None),
+            };
+            self.token = q.0;
+            if let Some(x) = q.1 {
+                return q.1;
             }
         }
 
@@ -135,7 +142,7 @@ impl Rs485Tx {
     }
 
     pub fn is_idle(&self) -> bool {
-        ! self.dma.is_enabled() // FIXME this is incorrect
+        true // ! self.dma.is_enabled() // FIXME this is incorrect
     }
 }
 
