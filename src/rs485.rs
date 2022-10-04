@@ -32,6 +32,7 @@ impl From<crate::hal::serial::Error> for SendError {
 enum Token {
     Unknown(u32),
     Addr(Address),
+    Sending,
 }
 
 pub struct Rs485 {
@@ -95,7 +96,10 @@ impl Rs485 {
                 self.timer.active();
                 timer = false;
                 if let Some(msg) = self.parser.feed(byte as char) {
-                    self.token = Token::Addr(msg.sender);
+                    self.parser.reset();
+                    if self.token != Token::Sending {
+                        self.token = Token::Addr(msg.sender);
+                    }
                     if let Some(cmd) = msg.command {
                         return Some(cmd)
                     }
@@ -104,6 +108,7 @@ impl Rs485 {
         }
 
         if self.rx.is_idle() {
+            self.parser.reset();
             self.bus_busy = false;
             self.timer.inactive();
             timer = false;
@@ -119,6 +124,7 @@ impl Rs485 {
                         (Token::Addr(Address::first()), Some(b'R'))
                     }
                 }
+                Token::Sending => (Token::Addr(crate::DEVICE_ADDRESS.next()), None),
                 Token::Addr(a) => (Token::Addr(a.next()), None),
             };
             self.token = q.0;
@@ -140,6 +146,7 @@ impl Rs485 {
             BUF.clear();
             self.tx_dma.disable();
             if datagen(&mut BUF) {
+                self.token = Token::Sending;
                 self.tx_dma.set_memory_address(BUF.as_ptr() as u32, true);
                 self.tx_dma.set_transfer_length(BUF.len() as u16);
                 self.tx_dma.enable();
