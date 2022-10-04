@@ -182,27 +182,31 @@ mod app {
     #[task(priority = 3, binds = USART1, local = [dog, rs485], shared = [button, voltage, temperature, ping_flag, timer_flag, command])]
     fn rs485_interrupt(mut cx: rs485_interrupt::Context) {
         cx.local.dog.feed();
-        let cmd = cx.local.rs485.interrupt(cx.shared.timer_flag.lock(|f| replace(f, false)));
+        let cmd = cx.local.rs485.interrupt(
+            cx.shared.timer_flag.lock(|f| replace(f, false)),
+            |buf| {
+                let button = cx.shared.button.lock(|b| b.take());
+                let ping_flag = cx.shared.ping_flag.lock(|f| replace(f, false));
+                if button.is_some() || ping_flag {
+                    let voltage = cx.shared.voltage.lock(|v| *v);
+                    let temperature = cx.shared.temperature.lock(|t| *t);
+                    let message = Message {
+                        sender: crate::DEVICE_ADDRESS,
+                        button: button.map(|b| b as u8),
+                        temperature,
+                        voltage,
+                    };
+                    message.to_bytes(buf);
+                    true
+                } else {
+                    false
+                }
+            }
+        );
         if let Some(c) = cmd {
             cx.shared.command.lock(|cmd| {
                 *cmd = Some(c);
             });
-        }
-
-        if cx.local.rs485.is_my_turn() {
-            let button = cx.shared.button.lock(|b| b.take());
-            let ping_flag = cx.shared.ping_flag.lock(|f| replace(f, false));
-            if button.is_some() || ping_flag {
-                let voltage = cx.shared.voltage.lock(|v| *v);
-                let temperature = cx.shared.temperature.lock(|t| *t);
-                let message = Message {
-                    sender: crate::DEVICE_ADDRESS,
-                    button: button.map(|b| b as u8),
-                    temperature,
-                    voltage,
-                };
-                cx.local.rs485.transmit(|buf| message.to_bytes(buf));
-            }
         }
     }
 

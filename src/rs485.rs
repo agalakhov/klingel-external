@@ -74,11 +74,17 @@ impl Rs485 {
         }
     }
 
-    pub fn is_my_turn(&self) -> bool {
-        ! self.bus_busy && self.token == Token::Addr(crate::DEVICE_ADDRESS)
+    pub fn interrupt(&mut self, timer: bool, write_fn: impl FnOnce(&mut BUF) -> bool) -> Option<u8> {
+        let rd = self.read(timer);
+
+        if self.is_my_turn() {
+            self.transmit(write_fn);
+        }
+
+        rd
     }
 
-    pub fn interrupt(&mut self, mut timer: bool) -> Option<u8> {
+    fn read(&mut self, mut timer: bool) -> Option<u8> {
         if timer {
             self.timer.clear_irq();
         }
@@ -124,16 +130,20 @@ impl Rs485 {
         None
     }
 
-    pub fn transmit(&mut self, datagen: impl FnOnce(&mut BUF)) {
+    fn is_my_turn(&self) -> bool {
+        ! self.bus_busy && self.token == Token::Addr(crate::DEVICE_ADDRESS)
+    }
+
+    fn transmit(&mut self, datagen: impl FnOnce(&mut BUF) -> bool) {
         static mut BUF: BUF = String::new(); 
         unsafe {
             BUF.clear();
-            datagen(&mut BUF);
             self.tx_dma.disable();
-            self.tx_dma.set_memory_address(BUF.as_ptr() as u32, true);
-            self.tx_dma.set_transfer_length(BUF.len() as u16);
-
-            self.tx_dma.enable();
+            if datagen(&mut BUF) {
+                self.tx_dma.set_memory_address(BUF.as_ptr() as u32, true);
+                self.tx_dma.set_transfer_length(BUF.len() as u16);
+                self.tx_dma.enable();
+            }
         }
     }
 }
