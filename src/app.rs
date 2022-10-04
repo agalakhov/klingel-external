@@ -14,7 +14,7 @@ mod app {
         watchdog::IndependedWatchdog,
     };
     use crate::led::{Color, Leds, Mode};
-    use crate::rs485::{Rs485Rx, Rs485Tx};
+    use crate::rs485::Rs485;
     use core::mem::replace;
     use rtic::pend;
     use systick_monotonic::{fugit::ExtU64, fugit::RateExtU32, Systick};
@@ -35,8 +35,7 @@ mod app {
     struct Local {
         led: Leds,
         adc: AdcReader<PA13<Analog>>,
-        rs485rx: Rs485Rx,
-        rs485tx: Rs485Tx,
+        rs485: Rs485,
         dog: IndependedWatchdog, 
     }
 
@@ -68,7 +67,7 @@ mod app {
 
         // Configure RS485
         let (rxd, txd, de) = (gpiob.pb7, gpioa.pa9, gpioa.pa12); // USART1
-        let (tx, rx) = dev
+        let uart = dev
             .USART1
             .usart(
                 (txd, rxd, de),
@@ -79,13 +78,10 @@ mod app {
                     .swap_pins(),
                 &mut rcc,
             )
-            .expect("Can't initialize RS485")
-            .split();
+            .expect("Can't initialize RS485");
         let rs485timer = dev.TIM17.timer(&mut rcc);
         let dma = dev.DMA.split(&mut rcc, dev.DMAMUX);
-        let rs485rx = Rs485Rx::new(rx, rs485timer);
-        let rs485tx = Rs485Tx::new(tx, dma.ch1);
-
+        let rs485 = Rs485::new(uart, rs485timer, dma.ch1);
 
         // Sleep 50 milliseconds before disabling SWD which is used as UART TX and ADC input.
         // This helps doing SWD debugging.
@@ -125,7 +121,7 @@ mod app {
             timer_flag: false,
         };
 
-        let local = Local { led, adc, rs485rx, rs485tx, dog };
+        let local = Local { led, adc, rs485, dog };
         let mono = Systick::new(delay.release(), rcc.clocks.ahb_clk.raw());
 
         led_work::spawn().expect("Can't spawn led_work");
@@ -183,17 +179,17 @@ mod app {
         pend(stm32::Interrupt::USART1);
     }
 
-    #[task(priority = 3, binds = USART1, local = [dog, rs485rx, rs485tx], shared = [button, voltage, temperature, ping_flag, timer_flag, command])]
+    #[task(priority = 3, binds = USART1, local = [dog, rs485], shared = [button, voltage, temperature, ping_flag, timer_flag, command])]
     fn rs485_interrupt(mut cx: rs485_interrupt::Context) {
         cx.local.dog.feed();
-        let cmd = cx.local.rs485rx.interrupt(cx.shared.timer_flag.lock(|f| replace(f, false)));
+        let cmd = cx.local.rs485.interrupt(cx.shared.timer_flag.lock(|f| replace(f, false)));
         if let Some(c) = cmd {
             cx.shared.command.lock(|cmd| {
                 *cmd = Some(c);
             });
         }
 
-        if cx.local.rs485rx.is_my_turn() && cx.local.rs485tx.is_idle() {
+        if cx.local.rs485.is_my_turn() {
             let button = cx.shared.button.lock(|b| b.take());
             let ping_flag = cx.shared.ping_flag.lock(|f| replace(f, false));
             if button.is_some() || ping_flag {
@@ -205,7 +201,7 @@ mod app {
                     temperature,
                     voltage,
                 };
-                cx.local.rs485tx.transmit(|buf| message.to_bytes(buf));
+                cx.local.rs485.transmit(|buf| message.to_bytes(buf));
             }
         }
     }

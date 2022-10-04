@@ -2,7 +2,7 @@
 
 use crate::hal::{
     prelude::*,
-    serial::{FullConfig, Rx, Tx},
+    serial::{FullConfig, Serial, Rx, Tx},
     timer::Timer,
     dma::{self, Channel, Target},
     stm32::{USART1, TIM17},
@@ -20,6 +20,8 @@ type TIMER = Timer<TIM17>;
 
 const SLOTSIZE: u32 = 32; // bytes
 
+pub type BUF = String<32>;
+
 impl From<crate::hal::serial::Error> for SendError {
     fn from(_: crate::hal::serial::Error) -> Self {
         Self
@@ -32,29 +34,43 @@ enum Token {
     Addr(Address),
 }
 
-pub struct Rs485Rx {
-    uart: UARTRX,
+pub struct Rs485 {
+    rx: UARTRX,
+    _tx: UARTTX,
     timer: TIMER, 
+    tx_dma: DMA,
     parser: incoming::Parser,
     bus_busy: bool,
     token: Token,
 }
 
-impl Rs485Rx {
-    pub fn new(mut uart: UARTRX, mut timer: TIMER) -> Self {
+impl Rs485 {
+    pub fn new(uart: Serial<UART, FullConfig>, mut timer: TIMER, mut tx_dma: DMA) -> Self {
+        let (mut tx, mut rx) = uart.split();
+
+        unsafe {
+            tx_dma.set_direction(dma::Direction::FromMemory);
+            tx_dma.set_peripheral_address(&(*UART::ptr()).tdr as *const _ as u32, false);
+            tx_dma.select_peripheral(tx.dmamux());
+            tx.enable_dma();
+        }
+        tx_dma.listen(dma::Event::TransferComplete);
+
         timer.start((1_000_000_u32 * (10 + 0) * SLOTSIZE / crate::RS485_BAUD).micros());
 
-        uart.listen();
-        uart.listen_idle();
+        rx.listen();
+        rx.listen_idle();
 
         timer.listen();
 
         Self {
-            uart,
-            timer,
+            rx,
+            _tx: tx,
             parser: incoming::Parser::new(),
-            token: Token::Unknown(0),
+            timer,
+            tx_dma,
             bus_busy: true,
+            token: Token::Unknown(0),
         }
     }
 
@@ -67,9 +83,9 @@ impl Rs485Rx {
             self.timer.clear_irq();
         }
 
-        while self.uart.is_rxne() {
+        while self.rx.is_rxne() {
             self.bus_busy = true;
-            if let Ok(byte) = self.uart.read() {
+            if let Ok(byte) = self.rx.read() {
                 self.timer.active();
                 timer = false;
                 if let Some(msg) = self.parser.feed(byte as char) {
@@ -81,11 +97,11 @@ impl Rs485Rx {
             }
         }
 
-        if self.uart.is_idle() {
+        if self.rx.is_idle() {
             self.bus_busy = false;
             self.timer.inactive();
             timer = false;
-            self.uart.clear_idle();
+            self.rx.clear_idle();
         }
 
         if timer {
@@ -101,35 +117,11 @@ impl Rs485Rx {
             };
             self.token = q.0;
             if let Some(x) = q.1 {
-                return q.1;
+                return Some(x);
             }
         }
 
         None
-    }
-}
-
-pub type BUF = String<32>;
-
-pub struct Rs485Tx {
-    _tx: UARTTX,
-    dma: DMA,
-}
-
-impl Rs485Tx {
-    pub fn new(mut tx: UARTTX, mut dma: DMA) -> Self {
-        unsafe {
-            dma.set_direction(dma::Direction::FromMemory);
-            dma.set_peripheral_address(&(*UART::ptr()).tdr as *const _ as u32, false);
-            dma.select_peripheral(tx.dmamux());
-            tx.enable_dma();
-        }
-        dma.listen(dma::Event::TransferComplete);
-
-        Self {
-            _tx: tx,
-            dma,
-        }
     }
 
     pub fn transmit(&mut self, datagen: impl FnOnce(&mut BUF)) {
@@ -137,16 +129,12 @@ impl Rs485Tx {
         unsafe {
             BUF.clear();
             datagen(&mut BUF);
-            self.dma.disable();
-            self.dma.set_memory_address(BUF.as_ptr() as u32, true);
-            self.dma.set_transfer_length(BUF.len() as u16);
+            self.tx_dma.disable();
+            self.tx_dma.set_memory_address(BUF.as_ptr() as u32, true);
+            self.tx_dma.set_transfer_length(BUF.len() as u16);
 
-            self.dma.enable();
+            self.tx_dma.enable();
         }
-    }
-
-    pub fn is_idle(&self) -> bool {
-        true // ! self.dma.is_enabled() // FIXME this is incorrect
     }
 }
 
