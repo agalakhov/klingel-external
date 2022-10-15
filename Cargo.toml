@@ -17,3 +17,4 @@ systick-monotonic = "*"
 smart-leds = "0.3.0"
 ws2812-uart = { path = "../ws2812-uart" }
 protocol = { path = "../protocol" }
+bounded-integer = { version = "0.5.3", features = ["types"] }

@@ -54,6 +54,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46afbd2983a5d5a7bd740ccb198caf5b82f45c40c09c0eed36052d91cb92e719"
 
 [[package]]
+name = "bounded-integer"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5e1b3208d8f58bbf78c750b0b136b7e6cfdb87e1a2801ffbc42077d029524cc"
+
+[[package]]
 name = "bytemuck"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -181,6 +187,7 @@ dependencies = [
 name = "external"
 version = "0.1.0"
 dependencies = [
+ "bounded-integer",
  "cortex-m",
  "cortex-m-rt",
  "cortex-m-rtic",
