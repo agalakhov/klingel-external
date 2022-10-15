@@ -7,6 +7,7 @@ use crate::hal::{
     dma::{self, Channel, Target},
     stm32::{USART1, TIM17},
 };
+use crate::command::Command;
 use heapless::String;
 use protocol::{Address, incoming};
 
@@ -75,7 +76,7 @@ impl Rs485 {
         }
     }
 
-    pub fn interrupt(&mut self, timer: bool, write_fn: impl FnOnce(&mut BUF) -> bool) -> Option<u8> {
+    pub fn interrupt(&mut self, timer: bool, write_fn: impl FnOnce(&mut BUF) -> bool) -> Option<Command> {
         let rd = self.read(timer);
 
         if self.is_my_turn() {
@@ -85,7 +86,7 @@ impl Rs485 {
         rd
     }
 
-    fn read(&mut self, mut timer: bool) -> Option<u8> {
+    fn read(&mut self, mut timer: bool) -> Option<Command> {
         if timer {
             self.timer.clear_irq();
         }
@@ -100,7 +101,7 @@ impl Rs485 {
                     if self.token != Token::Sending {
                         self.token = Token::Addr(msg.sender);
                     }
-                    if let Some(cmd) = msg.command {
+                    if let Some(cmd) = Command::from_rs485(msg) {
                         return Some(cmd)
                     }
                 }
@@ -121,7 +122,7 @@ impl Rs485 {
                     if n < crate::MAX_DETECT_CYCLES {
                         (Token::Unknown(n + 1), None)
                     } else {
-                        (Token::Addr(Address::first()), Some(b'R'))
+                        (Token::Addr(Address::first()), Some(Command::no_connection()))
                     }
                 }
                 Token::Sending => (Token::Addr(crate::DEVICE_ADDRESS.next()), None),

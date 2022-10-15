@@ -117,7 +117,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Mode {
     Constant(Color),
     Blink(Color, Duration<u32, 1, 100>),

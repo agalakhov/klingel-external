@@ -13,8 +13,9 @@ mod app {
         stm32,
         watchdog::IndependedWatchdog,
     };
-    use crate::led::{Color, Leds, Mode, Intensity};
+    use crate::led::{Color, Leds, Mode};
     use crate::rs485::Rs485;
+    use crate::command::Command;
     use core::mem::replace;
     use rtic::pend;
     use systick_monotonic::{fugit::ExtU64, Systick};
@@ -26,7 +27,7 @@ mod app {
         voltage: u16,
         temperature: i16,
         button: Option<Button>,
-        command: Option<u8>,
+        command: Option<Command>,
         timer_flag: bool,
         ping_flag: bool,
     }
@@ -135,14 +136,7 @@ mod app {
     fn led_work(mut cx: led_work::Context) {
         let cmd = cx.shared.command.lock(|cmd| cmd.take());
         if let Some(cmd) = cmd {
-            let mode = match cmd {
-                b'R' => Mode::Constant(Color::Red),
-                b'G' => Mode::Constant(Color::Green),
-                b'Y' => Mode::Constant(Color::Yellow),
-                b'W' => Mode::Constant(Color::White),
-                _ => Mode::Constant(Color::Magenta),
-            };
-            cx.local.led.set_mode(mode);
+            cmd.apply(&mut cx.local.led);
         } else {
             cx.local.led.tick();
         }
