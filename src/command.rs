@@ -36,7 +36,11 @@ impl FromLetter for Mode {
 }
 
 fn slow_glow() -> Duration<u32, 1, 100> {
-    300_u32.millis()
+    3000_u32.millis()
+}
+
+fn fast_glow() -> Duration<u32, 1, 100> {
+    800_u32.millis()
 }
 
 impl Command {
@@ -72,8 +76,8 @@ impl Command {
 
     pub fn no_connection() -> Self {
         Command {
-            mode: Some(Mode::Blink(Color::Red, 1.secs())),
-            effect: Some(Mode::Glow(Color::Blue, slow_glow())),
+            mode: Some(Mode::Blink(Color::Red, 3.secs())),
+            effect: Some(Mode::Glow(Color::Blue, fast_glow())),
             intensity: None
         }
     }

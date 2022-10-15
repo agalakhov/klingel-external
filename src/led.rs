@@ -217,7 +217,8 @@ impl Leds {
     }
 
     fn refresh(&mut self) {
-        if self.tick >= self.mode.max_ticks() {
+        let max = self.effect.map(|e| e.max_ticks()).unwrap_or(self.mode.max_ticks());
+        if self.tick >= max {
             self.tick = 0;
             self.effect = None;
         };
