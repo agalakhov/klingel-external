@@ -13,11 +13,11 @@ mod app {
         stm32,
         watchdog::IndependedWatchdog,
     };
-    use crate::led::{Color, Leds, Mode};
+    use crate::led::{Color, Leds, Mode, Intensity};
     use crate::rs485::Rs485;
     use core::mem::replace;
     use rtic::pend;
-    use systick_monotonic::{fugit::ExtU64, fugit::RateExtU32, Systick};
+    use systick_monotonic::{fugit::ExtU64, Systick};
     use protocol::outgoing::Message;
     use cortex_m::asm;
 
@@ -105,7 +105,7 @@ mod app {
             .expect("Can't initialize LED UART");
         let mut led = Leds::new(led);
         delay.delay(1_u32.millis());
-        led.set_mode(Mode::Blink(Color::Yellow, 1.Hz()));
+        led.set_mode(Mode::Blink(Color::Yellow, 1_u32.secs()));
 
         // Configure buttons via ADC
         let buttons = gpioa.pa13; // ADC1_IN17
@@ -143,9 +143,9 @@ mod app {
                 _ => Mode::Constant(Color::Magenta),
             };
             cx.local.led.set_mode(mode);
+        } else {
+            cx.local.led.tick();
         }
-
-        cx.local.led.tick();
         led_work::spawn_after(cx.local.led.period()).expect("Can't respawn led_work");
     }
 

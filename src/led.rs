@@ -3,7 +3,7 @@ use ws2812_uart;
 
 use crate::hal::{self, serial, stm32};
 
-use fugit::{Rate, Duration};
+use fugit::Duration;
 use bounded_integer::BoundedU8;
 
 pub type Intensity = BoundedU8<1, 10>;
@@ -20,7 +20,9 @@ pub enum Color {
     White,
 }
 
-impl From<Color> for RGBW<u8> {
+type RawColor = RGBW<u8>;
+
+impl From<Color> for RawColor {
     fn from(color: Color) -> Self {
         use Color::*;
         match color {
@@ -76,24 +78,41 @@ impl From<Color> for RGBW<u8> {
     }
 }
 
-trait ScaleColor {
-    fn scale(self, intensity: Intensity) -> Self;
+trait ScaleColor<Factor> {
+    fn scale(self, factor: Factor) -> Self;
 }
 
-impl ScaleColor for u8 {
-    fn scale(self, intensity: Intensity) -> Self {
-        ((self as u16) * (Intensity::MAX_VALUE as u16) / (intensity.get() as u16)) as u8
+impl ScaleColor<(u8, u8)> for u8 {
+    fn scale(self, (intensity, maximum): (u8, u8)) -> Self {
+        ((self as u16) * (intensity as u16) / (maximum as u16)) as u8
     }
 }
 
-impl<T: ScaleColor> ScaleColor for RGBW<T> {
+impl ScaleColor<(u32, u32)> for u8 {
+    fn scale(self, (intensity, maximum): (u32, u32)) -> Self {
+        ((self as u64) * (intensity as u64) / (maximum as u64)) as u8
+    }
+}
+
+impl ScaleColor<Intensity> for u8 {
     fn scale(self, intensity: Intensity) -> Self {
+        self.scale((intensity.get(), Intensity::MAX_VALUE))
+    }
+}
+
+
+impl<T, Factor> ScaleColor<Factor> for RGBW<T>
+where
+    T: ScaleColor<Factor>,
+    Factor: Copy,
+{
+    fn scale(self, factor: Factor) -> Self {
         let RGBW { r, g, b, a: W(w) } = self;
         RGBW {
-            r: r.scale(intensity),
-            g: g.scale(intensity),
-            b: b.scale(intensity),
-            a: W(w.scale(intensity)),
+            r: r.scale(factor),
+            g: g.scale(factor),
+            b: b.scale(factor),
+            a: W(w.scale(factor)),
         }
     }
 }
@@ -101,7 +120,8 @@ impl<T: ScaleColor> ScaleColor for RGBW<T> {
 #[derive(Debug)]
 pub enum Mode {
     Constant(Color),
-    Blink(Color, Rate<u32, 1, 100>),
+    Blink(Color, Duration<u32, 1, 100>),
+    Glow(Color, Duration<u32, 1, 100>),
 }
 
 impl Mode {
@@ -109,31 +129,41 @@ impl Mode {
         use Mode::*;
         match self {
             Constant(_) => 1000,
-            Blink(_, period) => period.raw(),
+            Blink(_, period) => period.ticks(),
+            Glow(_, period) => period.ticks(),
         }
     }
 
-    fn color_for_tick(&self, tick: u32, on_reset: bool) -> Option<Color> {
+    fn color_for_tick(&self, tick: u32, on_reset: bool) -> Option<RawColor> {
         use Mode::*;
         match self {
             Constant(color) => {
                 if tick == 0 || on_reset {
-                    Some(*color)
+                    Some((*color).into())
                 } else {
                     None
                 }
             }
             Blink(color, period) => {
-                let c = if tick >= period.raw() / 2 {
+                let c = if tick >= period.ticks() / 2 {
                     Color::Off
                 } else {
                     *color
                 };
-                if tick == 0 || tick == period.raw() / 2 || on_reset {
-                    Some(c)
+                if tick == 0 || tick == period.ticks() / 2 || on_reset {
+                    Some(c.into())
                 } else {
                     None
                 }
+            }
+            Glow(color, period) => {
+                let max = period.ticks() / 2;
+                let f = if tick <= max {
+                    tick
+                } else {
+                    period.ticks() - tick
+                };
+                Some(RawColor::from(*color).scale((f, max)))
             }
         }
     }
@@ -183,11 +213,11 @@ impl Leds {
             self.tick = 0;
         };
         if let Some(color) = self.mode.color_for_tick(self.tick, force) {
-            self.set_board_color_raw(color.into());
+            self.set_board_color_raw(color);
         }
     }
 
-    fn set_board_color_raw(&mut self, color: RGBW<u8>) {
+    fn set_board_color_raw(&mut self, color: RawColor) {
         let color = color.scale(self.intensity);
         self.led
             .write([color; 8].into_iter())
