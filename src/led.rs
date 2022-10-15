@@ -175,6 +175,7 @@ pub struct Leds {
         ws2812_uart::device::Sk6812w,
     >,
     mode: Mode,
+    effect: Option<Mode>,
     tick: u32,
     intensity: Intensity,
 }
@@ -186,7 +187,7 @@ impl Leds {
         let led = ws2812_uart::Ws2812::<_, ws2812_uart::device::Sk6812w>::new(uart);
 
         let mode = Mode::Constant(Color::Magenta);
-        Self { led, mode, tick: 0, intensity: Intensity::MAX }
+        Self { led, mode, tick: 0, intensity: Intensity::MAX, effect: None }
     }
 
     pub const fn period(&self) -> Duration<u64, 1, 1000> {
@@ -208,11 +209,19 @@ impl Leds {
         self.refresh(true);
     }
 
+    pub fn show_effect(&mut self, effect: Mode) {
+        self.tick = 0;
+        self.effect = Some(effect);
+        self.refresh(true);
+    }
+
     fn refresh(&mut self, force: bool) {
         if self.tick >= self.mode.max_ticks() {
             self.tick = 0;
+            self.effect = None;
         };
-        if let Some(color) = self.mode.color_for_tick(self.tick, force) {
+        let mode = self.effect.as_ref().unwrap_or(&self.mode);
+        if let Some(color) = mode.color_for_tick(self.tick, force) {
             self.set_board_color_raw(color);
         }
     }
