@@ -5,22 +5,21 @@ use panic_semihosting as _;
 #[app(device = crate::hal::stm32, peripherals = true, dispatchers = [EXTI0_1, EXTI2_3, EXTI4_15, I2C1, I2C2, SPI1, SPI2])]
 mod app {
     use crate::adc::{AdcReader, Button};
+    use crate::command::Command;
     use crate::hal::{
         gpio::{gpioa::PA13, Analog},
         prelude::*,
         rcc::{self, Enable, PllConfig},
-        serial,
-        stm32,
+        serial, stm32,
         watchdog::IndependedWatchdog,
     };
     use crate::led::{Color, Leds, Mode};
     use crate::rs485::Rs485;
-    use crate::command::Command;
     use core::mem::replace;
+    use cortex_m::asm;
+    use protocol::outgoing::Message;
     use rtic::pend;
     use systick_monotonic::{fugit::ExtU64, Systick};
-    use protocol::outgoing::Message;
-    use cortex_m::asm;
 
     #[shared]
     struct Shared {
@@ -37,7 +36,7 @@ mod app {
         led: Leds,
         adc: AdcReader<PA13<Analog>>,
         rs485: Rs485,
-        dog: IndependedWatchdog, 
+        dog: IndependedWatchdog,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -122,7 +121,12 @@ mod app {
             timer_flag: false,
         };
 
-        let local = Local { led, adc, rs485, dog };
+        let local = Local {
+            led,
+            adc,
+            rs485,
+            dog,
+        };
         let mono = Systick::new(delay.release(), rcc.clocks.ahb_clk.raw());
 
         led_work::spawn().expect("Can't spawn led_work");
@@ -175,27 +179,27 @@ mod app {
     #[task(priority = 3, binds = USART1, local = [dog, rs485], shared = [button, voltage, temperature, ping_flag, timer_flag, command])]
     fn rs485_interrupt(mut cx: rs485_interrupt::Context) {
         cx.local.dog.feed();
-        let cmd = cx.local.rs485.interrupt(
-            cx.shared.timer_flag.lock(|f| replace(f, false)),
-            |buf| {
-                let button = cx.shared.button.lock(|b| b.take());
-                let ping_flag = cx.shared.ping_flag.lock(|f| replace(f, false));
-                if button.is_some() || ping_flag {
-                    let voltage = cx.shared.voltage.lock(|v| *v);
-                    let temperature = cx.shared.temperature.lock(|t| *t);
-                    let message = Message {
-                        sender: crate::DEVICE_ADDRESS,
-                        button: button.map(|b| b as u8),
-                        temperature,
-                        voltage,
-                    };
-                    message.to_bytes(buf);
-                    true
-                } else {
-                    false
-                }
-            }
-        );
+        let cmd =
+            cx.local
+                .rs485
+                .interrupt(cx.shared.timer_flag.lock(|f| replace(f, false)), |buf| {
+                    let button = cx.shared.button.lock(|b| b.take());
+                    let ping_flag = cx.shared.ping_flag.lock(|f| replace(f, false));
+                    if button.is_some() || ping_flag {
+                        let voltage = cx.shared.voltage.lock(|v| *v);
+                        let temperature = cx.shared.temperature.lock(|t| *t);
+                        let message = Message {
+                            sender: crate::DEVICE_ADDRESS,
+                            button: button.map(|b| b as u8),
+                            temperature,
+                            voltage,
+                        };
+                        message.to_bytes(buf);
+                        true
+                    } else {
+                        false
+                    }
+                });
         if let Some(c) = cmd {
             cx.shared.command.lock(|cmd| {
                 *cmd = Some(c);

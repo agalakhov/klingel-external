@@ -1,15 +1,15 @@
 //! RS485 arbiter.
 
-use crate::hal::{
-    prelude::*,
-    serial::{FullConfig, Serial, Rx, Tx},
-    timer::Timer,
-    dma::{self, Channel, Target},
-    stm32::{USART1, TIM17},
-};
 use crate::command::Command;
+use crate::hal::{
+    dma::{self, Channel, Target},
+    prelude::*,
+    serial::{FullConfig, Rx, Serial, Tx},
+    stm32::{TIM17, USART1},
+    timer::Timer,
+};
 use heapless::String;
-use protocol::{Address, incoming};
+use protocol::{incoming, Address};
 
 pub struct SendError;
 
@@ -39,7 +39,7 @@ enum Token {
 pub struct Rs485 {
     rx: UARTRX,
     _tx: UARTTX,
-    timer: TIMER, 
+    timer: TIMER,
     tx_dma: DMA,
     parser: incoming::Parser,
     bus_busy: bool,
@@ -76,7 +76,11 @@ impl Rs485 {
         }
     }
 
-    pub fn interrupt(&mut self, timer: bool, write_fn: impl FnOnce(&mut BUF) -> bool) -> Option<Command> {
+    pub fn interrupt(
+        &mut self,
+        timer: bool,
+        write_fn: impl FnOnce(&mut BUF) -> bool,
+    ) -> Option<Command> {
         let rd = self.read(timer);
 
         if self.is_my_turn() {
@@ -102,7 +106,7 @@ impl Rs485 {
                         self.token = Token::Addr(msg.sender);
                     }
                     if let Some(cmd) = Command::from_rs485(msg) {
-                        return Some(cmd)
+                        return Some(cmd);
                     }
                 }
             }
@@ -122,7 +126,10 @@ impl Rs485 {
                     if n < crate::MAX_DETECT_CYCLES {
                         (Token::Unknown(n + 1), None)
                     } else {
-                        (Token::Addr(Address::first()), Some(Command::no_connection()))
+                        (
+                            Token::Addr(Address::first()),
+                            Some(Command::no_connection()),
+                        )
                     }
                 }
                 Token::Sending => (Token::Addr(crate::DEVICE_ADDRESS.next()), None),
@@ -138,11 +145,11 @@ impl Rs485 {
     }
 
     fn is_my_turn(&self) -> bool {
-        ! self.bus_busy && self.token == Token::Addr(crate::DEVICE_ADDRESS)
+        !self.bus_busy && self.token == Token::Addr(crate::DEVICE_ADDRESS)
     }
 
     fn transmit(&mut self, datagen: impl FnOnce(&mut BUF) -> bool) {
-        static mut BUF: BUF = String::new(); 
+        static mut BUF: BUF = String::new();
         unsafe {
             BUF.clear();
             self.tx_dma.disable();

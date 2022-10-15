@@ -3,9 +3,9 @@
 
 mod adc;
 mod app;
+mod command;
 mod led;
 mod rs485;
-mod command;
 
 use stm32g0xx_hal as hal;
 

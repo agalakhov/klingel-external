@@ -1,4 +1,4 @@
-use crate::led::{Color, Mode, Intensity, Leds};
+use crate::led::{Color, Intensity, Leds, Mode};
 use fugit::{Duration, ExtU32};
 use protocol::incoming::Message;
 
@@ -78,7 +78,7 @@ impl Command {
         Command {
             mode: Some(Mode::Blink(Color::Red, 3.secs())),
             effect: Some(Mode::Glow(Color::Blue, fast_glow())),
-            intensity: None
+            intensity: None,
         }
     }
 }

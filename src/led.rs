@@ -3,8 +3,8 @@ use ws2812_uart;
 
 use crate::hal::{self, serial, stm32};
 
-use fugit::Duration;
 use bounded_integer::BoundedU8;
+use fugit::Duration;
 
 pub type Intensity = BoundedU8<1, 10>;
 
@@ -100,7 +100,6 @@ impl ScaleColor<Intensity> for u8 {
     }
 }
 
-
 impl<T, Factor> ScaleColor<Factor> for RGBW<T>
 where
     T: ScaleColor<Factor>,
@@ -188,7 +187,14 @@ impl Leds {
         let led = ws2812_uart::Ws2812::<_, ws2812_uart::device::Sk6812w>::new(uart);
 
         let mode = Mode::Constant(Color::Magenta);
-        Self { led, mode, tick: 0, intensity: Intensity::MAX, effect: None, dirty: true }
+        Self {
+            led,
+            mode,
+            tick: 0,
+            intensity: Intensity::MAX,
+            effect: None,
+            dirty: true,
+        }
     }
 
     pub const fn period(&self) -> Duration<u64, 1, 1000> {
@@ -217,7 +223,10 @@ impl Leds {
     }
 
     fn refresh(&mut self) {
-        let max = self.effect.map(|e| e.max_ticks()).unwrap_or(self.mode.max_ticks());
+        let max = self
+            .effect
+            .map(|e| e.max_ticks())
+            .unwrap_or(self.mode.max_ticks());
         if self.tick >= max {
             self.tick = 0;
             self.effect = None;
