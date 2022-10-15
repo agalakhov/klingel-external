@@ -174,6 +174,7 @@ pub struct Leds {
         hal::serial::Serial<stm32::USART2, serial::BasicConfig>,
         ws2812_uart::device::Sk6812w,
     >,
+    dirty: bool,
     mode: Mode,
     effect: Option<Mode>,
     tick: u32,
@@ -187,7 +188,7 @@ impl Leds {
         let led = ws2812_uart::Ws2812::<_, ws2812_uart::device::Sk6812w>::new(uart);
 
         let mode = Mode::Constant(Color::Magenta);
-        Self { led, mode, tick: 0, intensity: Intensity::MAX, effect: None }
+        Self { led, mode, tick: 0, intensity: Intensity::MAX, effect: None, dirty: true }
     }
 
     pub const fn period(&self) -> Duration<u64, 1, 1000> {
@@ -196,34 +197,35 @@ impl Leds {
 
     pub fn tick(&mut self) {
         self.tick += 1;
-        self.refresh(false)
+        self.refresh()
     }
 
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
-        self.refresh(true);
+        self.dirty = true;
     }
 
     pub fn set_intensity(&mut self, intensity: Intensity) {
         self.intensity = intensity;
-        self.refresh(true);
+        self.dirty = true;
     }
 
     pub fn show_effect(&mut self, effect: Mode) {
         self.tick = 0;
         self.effect = Some(effect);
-        self.refresh(true);
+        self.dirty = true;
     }
 
-    fn refresh(&mut self, force: bool) {
+    fn refresh(&mut self) {
         if self.tick >= self.mode.max_ticks() {
             self.tick = 0;
             self.effect = None;
         };
         let mode = self.effect.as_ref().unwrap_or(&self.mode);
-        if let Some(color) = mode.color_for_tick(self.tick, force) {
+        if let Some(color) = mode.color_for_tick(self.tick, self.dirty) {
             self.set_board_color_raw(color);
         }
+        self.dirty = false;
     }
 
     fn set_board_color_raw(&mut self, color: RawColor) {

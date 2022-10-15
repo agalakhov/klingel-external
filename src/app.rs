@@ -137,9 +137,8 @@ mod app {
         let cmd = cx.shared.command.lock(|cmd| cmd.take());
         if let Some(cmd) = cmd {
             cmd.apply(&mut cx.local.led);
-        } else {
-            cx.local.led.tick();
         }
+        cx.local.led.tick();
         led_work::spawn_after(cx.local.led.period()).expect("Can't respawn led_work");
     }
 
