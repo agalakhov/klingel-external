@@ -11,6 +11,7 @@ mod app {
         prelude::*,
         rcc::{self, Enable, PllConfig},
         serial, stm32,
+        timer::Timer,
         watchdog::IndependedWatchdog,
     };
     use crate::led::{Color, Leds, Mode};
@@ -29,6 +30,7 @@ mod app {
         command: Option<Command>,
         timer_flag: bool,
         ping_flag: bool,
+        uptime: u32,
     }
 
     #[local]
@@ -37,6 +39,7 @@ mod app {
         adc: AdcReader<PA13<Analog>>,
         rs485: Rs485,
         dog: IndependedWatchdog,
+        uptimer: Timer<stm32::TIM16>,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -112,6 +115,10 @@ mod app {
         let adc = dev.ADC.constrain(&mut rcc);
         let adc = AdcReader::new(adc, buttons, &mut delay);
 
+        let mut uptimer = dev.TIM16.timer(&mut rcc);
+        uptimer.listen();
+        uptimer.start(1_u32.secs());
+
         let shared = Shared {
             voltage: 0,
             temperature: -2731,
@@ -119,6 +126,7 @@ mod app {
             command: None,
             ping_flag: false,
             timer_flag: false,
+            uptime: 0,
         };
 
         let local = Local {
@@ -126,6 +134,7 @@ mod app {
             adc,
             rs485,
             dog,
+            uptimer,
         };
         let mono = Systick::new(delay.release(), rcc.clocks.ahb_clk.raw());
 
@@ -176,7 +185,13 @@ mod app {
         pend(stm32::Interrupt::USART1);
     }
 
-    #[task(priority = 3, binds = USART1, local = [dog, rs485], shared = [button, voltage, temperature, ping_flag, timer_flag, command])]
+    #[task(priority = 3, binds = TIM16, local = [uptimer], shared = [uptime])]
+    fn uptime_counter(mut cx: uptime_counter::Context) {
+        cx.shared.uptime.lock(|t| *t = t.wrapping_add(1));
+        cx.local.uptimer.clear_irq();
+    }
+
+    #[task(priority = 4, binds = USART1, local = [dog, rs485], shared = [button, voltage, temperature, ping_flag, timer_flag, uptime, command])]
     fn rs485_interrupt(mut cx: rs485_interrupt::Context) {
         cx.local.dog.feed();
         let cmd =
@@ -188,11 +203,13 @@ mod app {
                     if button.is_some() || ping_flag {
                         let voltage = cx.shared.voltage.lock(|v| *v);
                         let temperature = cx.shared.temperature.lock(|t| *t);
+                        let uptime = cx.shared.uptime.lock(|t| *t);
                         let message = Message {
                             sender: crate::DEVICE_ADDRESS,
                             button: button.map(|b| b as u8),
                             temperature,
                             voltage,
+                            uptime,
                         };
                         message.to_bytes(buf);
                         true
