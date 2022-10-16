@@ -44,6 +44,7 @@ pub struct Rs485 {
     parser: incoming::Parser,
     bus_busy: bool,
     token: Token,
+    alone_cycles: u32,
 }
 
 impl Rs485 {
@@ -73,6 +74,7 @@ impl Rs485 {
             tx_dma,
             bus_busy: true,
             token: Token::Unknown(0),
+            alone_cycles: 0,
         }
     }
 
@@ -103,6 +105,7 @@ impl Rs485 {
                 if let Some(msg) = self.parser.feed(byte as char) {
                     self.parser.reset();
                     if self.token != Token::Sending {
+                        self.alone_cycles = 0;
                         self.token = Token::Addr(msg.sender);
                     }
                     if let Some(cmd) = Command::from_rs485(msg) {
@@ -133,7 +136,17 @@ impl Rs485 {
                     }
                 }
                 Token::Sending => (Token::Addr(crate::DEVICE_ADDRESS.next()), None),
-                Token::Addr(a) => (Token::Addr(a.next()), None),
+                Token::Addr(a) => {
+                    if self.alone_cycles < crate::MAX_ALONE_CYCLES + 1 {
+                        self.alone_cycles += 1;
+                    }
+                    let res = if self.alone_cycles == crate::MAX_ALONE_CYCLES {
+                        Some(Command::no_connection())
+                    } else {
+                        None
+                    };
+                    (Token::Addr(a.next()), res)
+                }
             };
             self.token = q.0;
             if let Some(x) = q.1 {
