@@ -62,7 +62,7 @@ impl Command {
         if message.color.is_some() || message.effect.is_some() || message.intensity.is_some() {
             let mode = message.color.and_then(Mode::from_letter);
             let effect = message.effect.and_then(Mode::from_letter);
-            let intensity = message.intensity.and_then(Intensity::new);
+            let intensity = message.intensity.and_then(|i| Intensity::new(i + 1));
 
             Some(Command {
                 mode,
