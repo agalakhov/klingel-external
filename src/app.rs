@@ -76,8 +76,6 @@ mod app {
                 (txd, rxd, de),
                 serial::FullConfig::default()
                     .baudrate(crate::RS485_BAUD.bps())
-                    .invert_tx()
-                    .invert_rx()
                     .swap_pins(),
                 &mut rcc,
             )
