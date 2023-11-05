@@ -90,7 +90,7 @@ mod app {
 
         // Setup watchdog
         let mut dog = dev.IWDG.constrain();
-        dog.start(10_u32.secs());
+        dog.start(3_u32.secs());
 
         // Configure Smart LED using UART
         let led = gpioa.pa14; // USART2
