@@ -167,6 +167,7 @@ dependencies = [
  "cortex-m-rtic",
  "fugit",
  "heapless",
+ "nb 1.1.0",
  "panic-semihosting",
  "protocol",
  "smart-leds",

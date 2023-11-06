@@ -10,6 +10,7 @@ use crate::hal::{
 };
 use heapless::String;
 use protocol::{incoming, Address};
+use nb::Error as NbError;
 
 pub struct SendError;
 
@@ -97,20 +98,42 @@ impl Rs485 {
             self.timer.clear_irq();
         }
 
-        while self.rx.is_rxne() {
-            self.bus_busy = true;
-            if let Ok(byte) = self.rx.read() {
-                self.timer.active();
-                timer = false;
-                if let Some(msg) = self.parser.feed(byte as char) {
+        loop {
+            match self.rx.read() {
+                Ok(byte) => {
+                    self.bus_busy = true;
+                    self.timer.active();
+                    timer = false;
+                    if let Some(msg) = self.parser.feed(byte as char) {
+                        self.parser.reset();
+                        if self.token != Token::Sending {
+                            self.alone_cycles = 0;
+                            self.token = Token::Addr(msg.sender);
+                        }
+                        if let Some(cmd) = Command::from_rs485(msg) {
+                            return Some(cmd);
+                        }
+                    }
+                }
+
+                Err(NbError::WouldBlock) => {
+                    break;
+                }
+
+                Err(NbError::Other(_)) => {
+                    // Bad news, perhaps we have a bus collision.
+                    // First, stop any ongoing transmission - NOW.
+                    self.tx_dma.disable();
+                    // Errors leave a corrupted value in the RX register and leave
+                    // the interrupt flag in active state, so read-out and ignore
+                    // any leftovers we have.
+                    let _ = self.rx.read();
+                    // And initiate bus re-negotiating.
                     self.parser.reset();
-                    if self.token != Token::Sending {
-                        self.alone_cycles = 0;
-                        self.token = Token::Addr(msg.sender);
-                    }
-                    if let Some(cmd) = Command::from_rs485(msg) {
-                        return Some(cmd);
-                    }
+                    self.bus_busy = false;
+                    self.token = Token::Unknown(0);
+                    self.alone_cycles = 0;
+                    self.timer.inactive();
                 }
             }
         }
