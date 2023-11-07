@@ -134,6 +134,7 @@ impl Rs485 {
                     self.token = Token::Unknown(0);
                     self.alone_cycles = 0;
                     self.timer.inactive();
+                    return None;
                 }
             }
         }
