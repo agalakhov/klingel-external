@@ -22,7 +22,7 @@ type TIMER = Timer<TIM17>;
 
 const SLOTSIZE: u32 = 32; // bytes
 
-pub type BUF = String<32>;
+pub type BUF = String<64>;
 
 impl From<crate::hal::serial::Error> for SendError {
     fn from(_: crate::hal::serial::Error) -> Self {
