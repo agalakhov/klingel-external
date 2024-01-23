@@ -1,1 +1,3 @@
 /target
+/hardware/*-backups/
+/hardware/*-cache
